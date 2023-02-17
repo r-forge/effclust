@@ -1,6 +1,6 @@
 Package: effClust
 Title: Calculate Effective Number of Clusters for a Linear Model
-Version: 0.7
+Version: 0.7.1
 Authors@R: person("Joe", "Ritter", , email = "jritter@umn.edu", role = c("aut", "cre"))
 Description: Calculates the (approximate) number of clusters for a regression model, as described in Carter, Schnepel, and Steigerwald (2017).
 Depends: R (>= 3.5.0)

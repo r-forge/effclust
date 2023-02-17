@@ -1,16 +1,16 @@
 #' Convenience function for checking for single NA
 #' Similar in spirit to isTRUE
-#' @noRd 
+#' @noRd
 isNA <- function(x) { length(x)==1 && is.na(x) }
 
 #' Process the include.only and exclude args and pass back
 #' a list of coefs to compute effective number of clusters for.
 #' @noRd
 incl.excl <- function(include.only, exclude, tags, fixed) {
-    if (isNA(include.only) & isNA(exclude)) {
+    if (is.null(include.only) && is.null(exclude)) {
         return(tags)
     }
-    if (!isNA(include.only)) {
+    if (!is.null(include.only)) {
         # Expand the regex for inclusion.
         include.vars <- unlist(sapply(include.only, grep, tags,
             fixed = fixed, value = TRUE
@@ -19,7 +19,7 @@ incl.excl <- function(include.only, exclude, tags, fixed) {
         exclude.vars <- setdiff(tags, include.vars)
         exclude.vars <- exclude.vars[!is.na(exclude.vars)]
     }
-    if (!isNA(exclude)) {
+    if (!is.null(exclude)) {
         # Expand regex for exclusion.
         exclude.vars <- unlist(sapply(exclude, grep, tags,
             fixed = fixed, value = TRUE
@@ -36,8 +36,9 @@ incl.excl <- function(include.only, exclude, tags, fixed) {
 #' Carter, Schnepel, and Steigerwald (2017).  \eqn{G^{*A}} does not
 #' accommodate multi-way clustering.
 #'
-#' @param object a formula or an object of class "lm", "plm", or
-#' "fixest" (with method "feols")
+#' @param object a formula or an object of class "lm", "plm", 
+#' "fixest" (with method "feols"), or (for the default method)
+#' a matrix of regressors
 #' @param cluster cluster identifier:
 #' a variable, a formula (see details), or, a length one
 #' character vector naming a variable in \code{data}.
@@ -52,15 +53,22 @@ incl.excl <- function(include.only, exclude, tags, fixed) {
 #' @param nominal logical indicating whether the number of clusters should
 #' be included as the first element of the return vector
 #' @param rho numeric scalar that changes assumed variance matrix (see details)
-#' @return vector of effective number of clusters for coefficients
+#' @param XpXinv the \eqn{k \times k} matrix \eqn{(X'X)^{-1}} where
+#' \eqn{X} is \eqn{n\times k} matrix \code{object} for the default method
+#' @param tags a character vector containing a subset of the column names of
+#' \code{object}
+#' @param ... arguments passed to methods
+#' @return vector of effective number of clusters for coefficients. 
 #' @details
 #' When \code{object} is a formula, it does not need a response variable
 #' (left-hand side), but if the response variable might have different
 #' missing cases than the right-hand side, it should be included. Cluster
 #' fixed effects, if any, must be explicitly included in
-#' the formula, or \code{data} should be within-transformed data. (The
-#' \pkg{data.table} package is especially handy for the coding the
-#' transformation; see the example.)
+#' the formula, or \code{data} should be appropriately transformed data. When
+#' there are only one or two fixed effects, the \pkg{data.table} package is
+#' especially handy for coding the transformation; see the example.  For
+#' fixed effects on more than two dimensions, \code{fixest::demean} can
+#' be used (or just provide the result of \code{fixest::feols}.)
 #'
 #' For regression objects, when \code{cluster} is a formula or a one
 #' element character vector, it is evaluated in the context of the data
@@ -105,6 +113,29 @@ incl.excl <- function(include.only, exclude, tags, fixed) {
 #' close to zero. (However, this is inconsistent with the ``worst case
 #' scenario'' approach that motivates Carter et al.'s recommendation.)
 #'
+#' \code{effClust} will return a value for a \code{glm} object (or a formula
+#' intended for a GLM). The result might or might not be a useful diagnostic.
+#' On one hand, \eqn{G^*} is fundamentally about the characteristics of
+#' the clusters. On the other hand, the derivation by Carter et. al.
+#' is based on linear regression.
+#'
+#' \strong{Default method.}
+#' The default method is a bare-bones function that does the actual
+#' calculation of the effective number of clusters; it is mainly intended to
+#' be a tool for adding methods.  It provides none of the error checking that
+#' is normally performed by the \code{effClust} methods.
+#'
+#' The matrix \code{object} must have column names.  It also must 
+#' include a column of ones if the hypothetical regression includes 
+#' an intercept.
+#'
+#' If \code{XpXinv} is provided, it will
+#' be indexed using \code{tags}, so its row and column names must be
+#' identical to (or a superset of) \code{tags}.
+#'
+#' If \code{object} cannot be coerced to numeric, the function will fail.
+#' Logical columns of \code{object} will be coerced to numeric, but factors
+#' will \emph{not} be expanded to dummy variables as done by \code{model.matrix}.
 #' @examples
 #' # some data with correlated errors
 #' set.seed(85914270)
@@ -141,96 +172,7 @@ incl.excl <- function(include.only, exclude, tags, fixed) {
 #' Reliable Inference Using summclust," QED Working Paper 1483, Queen's
 #' University (2022). \url{https://www.econ.queensu.ca/research/working-papers/1483}.
 #' @export
-effClust <- function(object, cluster, data=NA, subset=NA,
-                     include.only=NA, exclude=NA,
-                     fixed=FALSE, nominal=FALSE, rho=0.999) {
+effClust <- function(object, cluster, ...) {
     UseMethod("effClust")
 }
 
-
-#' Do the actual calculation of G*.
-#' @noRd
-calcGstar <- function(X, XpXinv, cluster, tags, rho, nominal) {
-    cl <- unique(cluster)
-    G <- length(cl)
-    gamma <- matrix(NA_real_,  nrow=G, ncol=length(tags))
-        # coef's gammas are in a column.
-    #########################################################################
-    # LOOP OVER CLUSTERS
-    # Each loop iteration calculates gamma_g for all coefs in tags.
-
-    for (g in seq_along(cl)) {
-        Xg <- X[cluster == cl[g], , drop=FALSE] # drop=FALSE in case ng==1
-        ng <- NROW(Xg)
-
-        # Now get to making the gammas.
-        # Calculation follows equations (38) in MacKinnon, Nielsen, and Webb,
-        # "Leverage, Influence, etc."
-        # rather than direct calculation based on Carter et al., which prevents
-        # problem of huge assumed variance matrix when ng is large.
-        # Note: Using sapply() below calculates only the diagonal elements of the
-        #       matrix multiplication in the original formula, which should be more
-        #       efficient, but it makes using a "selection vector" with more than
-        #       a single nonzero value impossible. The error checks and so forth
-        #       for selection are in the code for the 0.5 version.
-        XpXg <- crossprod(Xg)
-        gam0 <- sapply(tags, function(v){XpXinv[v, ] %*% XpXg %*% XpXinv[ , v]})    # eqn (38a)
-        if (rho > 0) {
-            ones <- matrix(rep(1, ng), nrow=1)                               # 1 X ng
-            U <- ones %*% Xg                                                 # 1 X k
-            U <- t(U) %*% U                                                  # k X k
-            gam1 <- sapply(tags,
-                           function(v){XpXinv[v, ] %*% U %*% XpXinv[ , v]})  # eqn (38b)
-        } else {
-            gam1 <- 0
-        }
-        gamma[g, ] <- rho*gam1 + (1-rho)*gam0                                # eqn (38c)
-    }
-
-    #########################################################################
-    # MAIN FORMULA
-    Gamma.numer <- ((G-1)/G) * apply(gamma, MARGIN=2, FUN=var)
-    Gamma.denom <- apply(gamma, MARGIN=2, FUN=mean)^2
-    Gamma <- Gamma.numer/Gamma.denom
-    Gstar <- G/(1 + Gamma)
-    names(Gstar) <- tags
-    if (nominal) Gstar <- c(nominal=G, Gstar)
-    return(Gstar)
-}
-
-#' Common error checks
-#' @noRd
-errorChecks <- function(object, cluster, data, subset, exclude, include.only) {
-
-    if ( inherits(object, "formula") && isNA(data) )
-            stop("Please provide data.")
-
-    if (is.character(cluster) && length(cluster) == 1 &&
-        !(cluster %in% names(data)))
-        stop(paste(cluster, "not found in data."))
-
-    if ( !isNA(exclude) && !isNA(include.only) )
-       stop("Only one of exclude or include.only may be specified.")
-    if ( !inherits(object, "formula") & (!isNA(data) || !isNA(subset)) )
-        warning("data and subset are ignored when object is not a formula.",
-                call.=FALSE)
-
-    if ( !inherits(cluster, "formula") && anyNA(cluster) )
-        stop("Can't have NA values in cluster argument
-        \nIt might help to specify cluster as a formula.")
-
-    if ( !inherits(cluster, "formula") && length(cluster != nobs(object)) )
-        stop("length(cluster) is different than number of observations.
-              \nIt might help to specify cluster as formula." )
-
-   if (inherits(cluster, "formula")) {
-        tt <- stats::terms(cluster)
-        tlabs <- attr(tt, "term.labels")
-        if (length(tlabs) > 1) {
-            stop("Multiway clustering is not allowed;
-                  cluster formula should have only one term.")
-        }
-   }
-
-    return(NULL)
-}
