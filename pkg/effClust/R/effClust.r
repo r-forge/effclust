@@ -1,34 +1,3 @@
-#' Convenience function for checking for single NA
-#' Similar in spirit to isTRUE
-#' @noRd
-isNA <- function(x) { length(x)==1 && is.na(x) }
-
-#' Process the include.only and exclude args and pass back
-#' a list of coefs to compute effective number of clusters for.
-#' @noRd
-incl.excl <- function(include.only, exclude, tags, fixed) {
-    if (is.null(include.only) && is.null(exclude)) {
-        return(tags)
-    }
-    if (!is.null(include.only)) {
-        # Expand the regex for inclusion.
-        include.vars <- unlist(sapply(include.only, grep, tags,
-            fixed = fixed, value = TRUE
-        ))
-        # What should be removed?
-        exclude.vars <- setdiff(tags, include.vars)
-        exclude.vars <- exclude.vars[!is.na(exclude.vars)]
-    }
-    if (!is.null(exclude)) {
-        # Expand regex for exclusion.
-        exclude.vars <- unlist(sapply(exclude, grep, tags,
-            fixed = fixed, value = TRUE
-        ))
-        exclude.vars <- exclude.vars[!is.na(exclude.vars)]
-    }
-    return(setdiff(tags, exclude.vars))
-}
-
 #' Compute Approximate Effective Number of Clusters for Regression Coefficients
 #'
 #' Specifically, for each coefficient the function returns the quantity
@@ -36,7 +5,7 @@ incl.excl <- function(include.only, exclude, tags, fixed) {
 #' Carter, Schnepel, and Steigerwald (2017).  \eqn{G^{*A}} does not
 #' accommodate multi-way clustering.
 #'
-#' @param object a formula or an object of class "lm", "plm", 
+#' @param object a formula or an object of class "lm", "plm",
 #' "fixest" (with method "feols"), or (for the default method)
 #' a matrix of regressors
 #' @param cluster cluster identifier:
@@ -58,31 +27,37 @@ incl.excl <- function(include.only, exclude, tags, fixed) {
 #' @param tags a character vector containing a subset of the column names of
 #' \code{object}
 #' @param ... arguments passed to methods
-#' @return vector of effective number of clusters for coefficients. 
+#' @return vector of effective number of clusters for coefficients.
 #' @details
 #' When \code{object} is a formula, it does not need a response variable
 #' (left-hand side), but if the response variable might have different
-#' missing cases than the right-hand side, it should be included. Cluster
-#' fixed effects, if any, must be explicitly included in
-#' the formula, or \code{data} should be appropriately transformed data. When
-#' there are only one or two fixed effects, the \pkg{data.table} package is
-#' especially handy for coding the transformation; see the example.  For
-#' fixed effects on more than two dimensions, \code{fixest::demean} can
-#' be used (or just provide the result of \code{fixest::feols}.)
+#' missing cases than the right-hand side, it should be included.
+#'
+#' Cluster fixed effects, if any, may be explicitly included in the main
+#' formula, or be specified with the syntax used by \code{fixest}:
+#'
+#'    \code{~ X1 + X2 + factor(id)} (fixed effects \code{id} in main formula)
+#'
+#'    \code{~ X1 + X2 | id} (\code{fixest} way to specify fixed effects)
+#'
+#' The first approach can be computationally demanding if there are too
+#' many units.  Alternatively, \code{data} can contain appropriately
+#' transformed variables (see the example below).
 #'
 #' For regression objects, when \code{cluster} is a formula or a one
 #' element character vector, it is evaluated in the context of the data
 #' used for the model, and the \code{data} and \code{subset} arguments
-#' are ignored with a warning.
+#' are ignored.
 #'
 #' The \code{data} argument is required when \code{object} is a formula.
-#' In this case, \code{object} is evaluated in the context of \code{data}.
-#' If \code{cluster} is a formula or length 1 character vector, it is
-#' interpreted as the name of a column of \code{data}.
+#' In this case, \code{object} is evaluated in the context of the \code{data}
+#' argument.  If \code{cluster} is a formula or length 1 character vector,
+#' it is interpreted as the name of a column of \code{data}.
 #'
-#' If \code{cluster} is a variable, it must not contain \code{NA} and its
-#' length must equal \code{nobs(reg)} or the number of rows in (subsetted)
-#' data when \code{object} is a formula.
+#' If \code{cluster} is a variable, its length must equal \code{nobs(object)}
+#' for regression objects or the number of rows in \code{data}
+#' when \code{object} is a formula. If \code{cluster} contains \code{NA},
+#' a warning is issued.
 #'
 #' By default \eqn{G^{*A}} is returned for all coefficients.
 #' The output may be limited by using \code{include.only}
@@ -90,7 +65,7 @@ incl.excl <- function(include.only, exclude, tags, fixed) {
 #' for coefficients that are included, only the vector returned.
 #'
 #' The regular expressions used by \code{include.only} or \code{exclude}
-#' should refer to the contents of \code{names(coef(reg))}, which might differ
+#' should refer to the contents of \code{names(coef(object))}, which might differ
 #' from how the regression formula refers to the same things.
 #' For example, groups of variables entered by using something
 #' like \code{factor(statefip)} in the regression formula show up in the
@@ -125,8 +100,8 @@ incl.excl <- function(include.only, exclude, tags, fixed) {
 #' be a tool for adding methods.  It provides none of the error checking that
 #' is normally performed by the \code{effClust} methods.
 #'
-#' The matrix \code{object} must have column names.  It also must 
-#' include a column of ones if the hypothetical regression includes 
+#' The matrix \code{object} must have column names.  It also must
+#' include a column of ones if the hypothetical regression includes
 #' an intercept.
 #'
 #' If \code{XpXinv} is provided, it will
@@ -150,9 +125,13 @@ incl.excl <- function(include.only, exclude, tags, fixed) {
 #' Y <- 1 + 2*X1 + 3*X2 - 1*X1*X2 + e + eg
 #' d <- data.frame(Y, X1, X2, id)
 #'
-#' r <- lm(Y ~ X1 + X1:X2 + factor(id), data=d)
+#' f1 <- Y ~ X1 + X1:X2 + factor(id)
+#' f2 <- Y ~ X1 + X1:X2 | id  # fixest syntax
+#'
+#' r <- lm(f1, data=d)
 #'
 #'effClust(r, ~d$id, exclude=c("factor\\(id\\)","Intercept"))
+#'effClust(f2, ~id, data=d)
 #'
 #' library(data.table)
 #' setDT(d)

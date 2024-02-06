@@ -45,16 +45,16 @@ effClust.fixest <- function(object, cluster,
         f2 <- stats::formula(object, type="linear") # the "main" part
         if (!cl.name %in% tt.lab) {
             # Is there a response variable in f2?
-            # Otherwise with one-sided formula update gives back a formula
+            # Otherwise with a one-sided formula, update gives back a formula
             # like .~X1
             yesY <- ifelse(length(f2) == 3, ".", "")
             f2 <- stats::update(f2, new=str2lang(paste0(yesY, "~.+", cl.name)))
         }
 
-        # Need to omit subset from the call to model.frame because with 
-        # fixest it is either a vector or a formula.  The vector will be 
-        # in parent.frame(), not # here, and model.frame doesn't accept 
-        # a formula in subset. So, we # need to subset it ourselves.
+        # Need to omit subset from the call to model.frame because with
+        # fixest it is either a vector or a formula.  The vector will be
+        # in parent.frame(), not here, and model.frame doesn't accept
+        # a formula in subset. So, we  need to subset it ourselves.
         # ALSO (grrr), need to set na.action = na.pass. Otherwise mdata
         # can end up with different rows than s.set below.  Then use
         # na.omit() after s.set is integrated into mdata.
@@ -72,7 +72,7 @@ effClust.fixest <- function(object, cluster,
                 mf <- object$call
                 mf$na.action = "na.pass"
                 mf[[1]] <- as.name("model.frame")
-                mf$fml <- mf$subset   
+                mf$fml <- mf$subset
                 names(mf)[c(1,2)] <- c("model.frame", "formula")
                 mf <- mf[c("model.frame","formula","data","na.action")]
                 s.set <- eval(mf, parent.frame())
@@ -86,13 +86,6 @@ effClust.fixest <- function(object, cluster,
         cluster <- mdata[ , cl.name]
     }
 
-    # # If cluster is character or factor, make it integer.
-    # # This only happens if the argument was a variable.
-    # if (is.factor(cluster)) cluster <- as.integer(cluster)
-    # if (is.character(cluster)) cluster <- as.integer(as.factor(cluster))
-
-    all.tags <- labels(tt)
-
     # Unlike plm::model.matrix, fixest::model.matrix does not return the
     # transformed data, so need to de-mean it to get X.
     X <- fixest::demean(model.matrix(object, type="rhs"),
@@ -101,12 +94,10 @@ effClust.fixest <- function(object, cluster,
     # data.table error if the data for object was a data.table.
     #X <- fixest::demean(object)
 
+    all.tags <- colnames(X)
+
     if (anyNA(cluster))
         warning("cluster variable includes NA for some complete cases of regressors.")
-
-    # XpXinv <- chol2inv(qr.R(qr(X)))
-    # rownames(XpXinv) <- names(coef(object))
-    # colnames(XpXinv) <- rownames(XpXinv)
 
    tags <- incl.excl(include.only, exclude, tags=all.tags, fixed=fixed)
 
